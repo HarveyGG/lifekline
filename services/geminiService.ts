@@ -16,19 +16,14 @@ const getStemPolarity = (pillar: string): 'YANG' | 'YIN' => {
 
 export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestinyResult> => {
   
-  const { apiKey, apiBaseUrl, modelName } = input;
+  const apiKey = (import.meta.env.VITE_GEMINI_API_KEY as string) || '';
 
   if (!apiKey || !apiKey.trim()) {
-    throw new Error("请在表单中填写有效的 API Key");
-  }
-  if (!apiBaseUrl || !apiBaseUrl.trim()) {
-    throw new Error("请在表单中填写有效的 API Base URL");
+    throw new Error("请在 .env.local 文件中配置 VITE_GEMINI_API_KEY");
   }
 
-  // Remove trailing slash if present
-  const cleanBaseUrl = apiBaseUrl.replace(/\/+$/, "");
-  // Use user provided model name or fallback
-  const targetModel = modelName && modelName.trim() ? modelName.trim() : "gemini-3-pro-preview";
+  const targetModel = "gemini-3-pro-preview";
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent`;
 
   const genderStr = input.gender === Gender.MALE ? '男 (乾造)' : '女 (坤造)';
   const startAgeInt = parseInt(input.startAge) || 1;
@@ -49,6 +44,8 @@ export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestin
     ? "例如：第一步是【戊申】，第二步则是【己酉】（顺排）" 
     : "例如：第一步是【戊申】，第二步则是【丁未】（逆排）";
 
+  const systemInstruction = BAZI_SYSTEM_INSTRUCTION;
+  
   const userPrompt = `
     请根据以下**已经排好的**八字四柱和**指定的大运信息**进行分析。
     
@@ -94,38 +91,67 @@ export const generateLifeAnalysis = async (input: UserInput): Promise<LifeDestin
     请严格按照系统指令生成 JSON 数据。
   `;
 
+  const fullPrompt = `${systemInstruction}\n\n${userPrompt}`;
+
   try {
-    const response = await fetch(`${cleanBaseUrl}/chat/completions`, {
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
+        'X-goog-api-key': apiKey,
       },
       body: JSON.stringify({
-        model: targetModel, 
-        messages: [
-          { role: "system", content: BAZI_SYSTEM_INSTRUCTION },
-          { role: "user", content: userPrompt }
+        contents: [
+          {
+            parts: [
+              {
+                text: fullPrompt
+              }
+            ]
+          }
         ],
-        response_format: { type: "json_object" },
-        temperature: 0.7
+        generationConfig: {
+          temperature: 0.7,
+          responseMimeType: "application/json"
+        }
       })
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`API 请求失败: ${response.status} - ${errText}`);
+      let errorMessage = `API 请求失败: ${response.status}`;
+      
+      if (response.status === 401) {
+        errorMessage += ' - 认证失败\n\n';
+        errorMessage += '可能的原因：\n';
+        errorMessage += '1. API Key 无效或已过期\n';
+        errorMessage += '2. 请检查 API Key 是否正确\n';
+        errorMessage += `\n原始错误: ${errText}`;
+      } else {
+        errorMessage += ` - ${errText}`;
+      }
+      
+      throw new Error(errorMessage);
     }
 
     const jsonResult = await response.json();
-    const content = jsonResult.choices?.[0]?.message?.content;
+    
+    if (!jsonResult.candidates || !jsonResult.candidates[0] || !jsonResult.candidates[0].content) {
+      throw new Error("模型未返回任何内容。");
+    }
+
+    const content = jsonResult.candidates[0].content.parts[0].text;
 
     if (!content) {
       throw new Error("模型未返回任何内容。");
     }
 
-    // 解析 JSON
-    const data = JSON.parse(content);
+    let data;
+    try {
+      data = JSON.parse(content);
+    } catch (parseError) {
+      throw new Error(`JSON 解析失败: ${parseError}. 原始内容: ${content.substring(0, 200)}`);
+    }
 
     // 简单校验数据完整性
     if (!data.chartPoints || !Array.isArray(data.chartPoints)) {

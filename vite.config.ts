@@ -7,8 +7,7 @@ export default defineConfig(({ mode }) => {
   // Set the third parameter to '' to load all env regardless of the `VITE_` prefix.
   const env = loadEnv(mode, (process as any).cwd(), '');
   
-  // Prioritize API_KEY, but fallback to VITE_API_KEY if the user followed standard Vite naming conventions
-  const apiKey = env.API_KEY || env.VITE_API_KEY;
+  const apiKey = env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
 
   return {
     plugins: [react()],
@@ -19,9 +18,8 @@ export default defineConfig(({ mode }) => {
       sourcemap: false,
     },
     define: {
-      // Safely stringify the key. If it's missing, it will be an empty string, 
-      // which will be caught by the check in geminiService.ts
-      'process.env.API_KEY': JSON.stringify(apiKey || '')
+      'import.meta.env.VITE_GEMINI_API_KEY': JSON.stringify(apiKey),
+      'process.env.VITE_GEMINI_API_KEY': JSON.stringify(apiKey)
     }
   };
 });
